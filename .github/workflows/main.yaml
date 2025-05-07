@@ -11,7 +11,6 @@ env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: campaign-manager
   EC2_INSTANCE_ID: i-01ca099839bc9605a # Remplace par l'ID de ton EC2
-  EC2_SSH_KEY_NAME: C:\Users\doria\.ssh\TP2_cloud # Remplace par le nom de ta clé SSH EC2
 
 jobs:
   test:
@@ -83,7 +82,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Write SSH private key to file
+        run: |
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -94,32 +96,27 @@ jobs:
 
       - name: SSH into EC2 and deploy Docker container
         run: |
-          # Get the public IP of your EC2 instance
           EC2_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids ${{ env.EC2_INSTANCE_ID }} --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
 
-          # SSH into EC2 instance and pull the latest image from ECR
-          ssh -i ${{ secrets.EC2_SSH_PRIVATE_KEY }} ec2-user@$EC2_PUBLIC_IP << 'EOF'
-            # Install Docker if not installed
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key ubuntu@$EC2_PUBLIC_IP << EOF
+            # Install Docker if not already installed
             if ! command -v docker &> /dev/null; then
-              sudo yum update -y
-              sudo amazon-linux-extras install docker
-              sudo service docker start
-              sudo usermod -a -G docker ec2-user
+              sudo apt update -y
+              sudo apt install -y docker.io
+              sudo systemctl start docker
+              sudo usermod -aG docker ubuntu
             fi
 
             # Login to Amazon ECR
-            $(aws ecr get-login --no-include-email --region ${{ env.AWS_REGION }})
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
 
-            # Pull the Docker image from ECR
+            # Pull latest Docker image
             docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
-            # Stop and remove any existing container
+            # Stop and remove existing container
             docker stop campaign-manager || true
             docker rm campaign-manager || true
 
-            # Run the container
-            docker run -d --name campaign-manager -p 80:5000 ${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}
-
-            # Check if the container is running
-            docker ps
+            # Run the new container
+            docker run -d --name campaign-manager -p 80:5000 ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           EOF

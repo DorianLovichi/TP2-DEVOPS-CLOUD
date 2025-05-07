@@ -77,12 +77,12 @@ jobs:
           # Build a docker container and push it to ECR
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: ${{ false }} # Désactivé pour l'instant jusqu'à ce que le cluster EKS soit configuré
+    # La condition "if: ${{ false }}" a été supprimée pour activer le déploiement
 
     steps:
       - uses: actions/checkout@v3
@@ -107,7 +107,7 @@ jobs:
           else
             echo "Warning: Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist. Please set up the EKS cluster first."
             echo "cluster_exists=false" >> $GITHUB_OUTPUT
-            exit 0  # Exit without error to allow workflow to continue
+            exit 1  # Échec si le cluster n'existe pas
           fi
 
       - name: Setup kubectl

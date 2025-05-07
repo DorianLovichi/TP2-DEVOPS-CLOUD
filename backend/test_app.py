@@ -4,6 +4,7 @@ import boto3
 import os
 from moto import mock_aws
 
+# Import app après avoir configuré l'environnement de test
 from app import app
 
 @pytest.fixture
@@ -15,6 +16,9 @@ def client():
 @pytest.fixture
 def dynamodb_table():
     with mock_aws():
+        # Définir la variable d'environnement pour le nom de la table
+        os.environ['DYNAMODB_TABLE'] = 'Campaigns'
+        
         # Créer une table DynamoDB simulée pour les tests
         dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
         table_name = 'Campaigns'
@@ -46,7 +50,6 @@ def dynamodb_table():
 
 def test_get_campaigns(client, dynamodb_table):
     """Tester la récupération des campagnes"""
-    os.environ['DYNAMODB_TABLE'] = 'Campaigns'
     response = client.get('/campaigns')
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -55,8 +58,6 @@ def test_get_campaigns(client, dynamodb_table):
 
 def test_add_campaign(client, dynamodb_table):
     """Tester l'ajout d'une nouvelle campagne"""
-    os.environ['DYNAMODB_TABLE'] = 'Campaigns'
-    
     new_campaign = {
         'title': 'New Test Campaign',
         'description': 'This is a new test campaign',

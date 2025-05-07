@@ -9,8 +9,8 @@ CORS(app)
 dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
 table_name = os.getenv('DYNAMODB_TABLE', 'Campaigns')
 
-@app.before_first_request
-def create_table():
+# Remplacer @app.before_first_request par une fonction d'initialisation
+def create_table_if_not_exists():
     try:
         dynamodb.create_table(
             TableName=table_name,
@@ -27,6 +27,10 @@ def create_table():
         )
     except Exception as e:
         print(f"Table creation skipped: {e}")
+
+# Appeler la fonction d'initialisation au démarrage de l'application
+with app.app_context():
+    create_table_if_not_exists()
 
 @app.route('/campaigns', methods=['GET'])
 def get_campaigns():

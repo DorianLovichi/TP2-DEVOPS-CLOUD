@@ -1,10 +1,17 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline for EKS
 
 on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: campaign-manager
+  EKS_CLUSTER_NAME: campaign-manager-cluster
+  KUBERNETES_NAMESPACE: campaign-manager
 
 jobs:
   test:
@@ -34,112 +41,75 @@ jobs:
       - name: Test with pytest
         run: pytest
 
-  build-and-deploy:
+  build-and-push:
     needs: test
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Verify AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-            echo "Missing AWS credentials"
-            exit 1
-          fi
+          # Build a docker container and push it to ECR
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: List and select Python stack
-        id: select_stack
-        run: |
-          STACK=$(aws elasticbeanstalk list-available-solution-stacks \
-            --query "SolutionStacks[?contains(@, '64bit Amazon Linux 2023 v4.5.1 running Python 3.13')]" \
-            --output text | head -n1)
-          echo "stack=$STACK" >> $GITHUB_OUTPUT
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Check if app exists
-        id: check_app
-        run: |
-          APP_EXISTS=$(aws elasticbeanstalk describe-applications \
-            --application-names campaign-manager --query "Applications[0].ApplicationName" --output text 2>/dev/null || echo "none")
-          if [ "$APP_EXISTS" = "none" ]; then
-            echo "exists=false" >> $GITHUB_OUTPUT
-          else
-            echo "exists=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create app if not exists
-        if: steps.check_app.outputs.exists == 'false'
-        run: aws elasticbeanstalk create-application --application-name campaign-manager
-
-      - name: Check if environment exists
-        id: check_env
-        run: |
-          ENV=$(aws elasticbeanstalk describe-environments --application-name campaign-manager \
-            --query "Environments[?EnvironmentName=='campaign-manager-env'].Status" --output text)
-          if [ -z "$ENV" ]; then
-            echo "env_exists=false" >> $GITHUB_OUTPUT
-          else
-            echo "env_exists=true" >> $GITHUB_OUTPUT
-            echo "env_status=$ENV" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Recreate environment if terminated
-        if: steps.check_env.outputs.env_status == 'Terminated'
-        run: |
-          echo "Recreating terminated environment..."
-          aws elasticbeanstalk delete-environment --environment-name campaign-manager-env || true
-          sleep 10
-          aws elasticbeanstalk create-environment \
-            --application-name campaign-manager \
-            --environment-name campaign-manager-env \
-            --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
-            --option-settings file://ebconfig.json
-
-      - name: Create environment if not exists
-        if: steps.check_env.outputs.env_exists == 'false'
-        run: |
-          aws elasticbeanstalk create-environment \
-            --application-name campaign-manager \
-            --environment-name campaign-manager-env \
-            --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
-            --option-settings file://ebconfig.json
-
-      - name: Wait for environment to be ready
-        run: |
-          STATUS=""
-          TIMEOUT=600  # 10 min max
-          while [ "$STATUS" != "Ready" ] && [ $TIMEOUT -gt 0 ]; do
-            STATUS=$(aws elasticbeanstalk describe-environments --application-name campaign-manager \
-              --environment-names campaign-manager-env --query "Environments[0].Status" --output text)
-            echo "Current status: $STATUS"
-            if [ "$STATUS" != "Ready" ]; then
-              sleep 20
-              TIMEOUT=$((TIMEOUT - 20))
-            fi
-          done
-          if [ "$STATUS" != "Ready" ]; then
-            echo "Timeout waiting for environment to be ready"
-            exit 1
-          fi
-
-      - name: Prepare deployment package
-        run: |
-          zip -r deploy.zip . -x "*.git*" "*.github*" "node_modules/*" "__pycache__/*" "*.pyc" "*.pyo" "*.pyd" "venv/*" "env/*"
-
-      - name: Deploy to Elastic Beanstalk
-        uses: einaregilsson/beanstalk-deploy@v21
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v1
         with:
-          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          region: us-east-1
-          application_name: campaign-manager
-          environment_name: campaign-manager-env
-          version_label: ${{ github.sha }}
-          deployment_package: deploy.zip
+          version: "v1.24.0"
+
+      - name: Update kube config
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to EKS
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Create namespace if doesn't exist
+          kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+          # Update kubernetes deployment file with new image
+          envsubst < k8s/deployment.yaml | kubectl apply -n ${{ env.KUBERNETES_NAMESPACE }} -f -
+
+          # Update service if it exists
+          kubectl apply -n ${{ env.KUBERNETES_NAMESPACE }} -f k8s/service.yaml
+
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/campaign-manager -n ${{ env.KUBERNETES_NAMESPACE }}

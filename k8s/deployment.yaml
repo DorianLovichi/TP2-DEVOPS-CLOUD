@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: campaign-manager
+  labels:
+    app: campaign-manager
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: campaign-manager
+  template:
+    metadata:
+      labels:
+        app: campaign-manager
+    spec:
+      containers:
+        - name: campaign-manager
+          image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          ports:
+            - containerPort: 5000
+          env:
+            - name: DYNAMODB_TABLE
+              value: "Campaigns"
+            - name: AWS_REGION
+              value: "us-east-1"
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /campaigns
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /campaigns
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 20

@@ -4,6 +4,14 @@ import boto3
 import os
 from moto import mock_aws
 
+# Configurer les identifiants fictifs pour les tests
+os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
+os.environ['AWS_SECURITY_TOKEN'] = 'testing'
+os.environ['AWS_SESSION_TOKEN'] = 'testing'
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
+os.environ['DYNAMODB_TABLE'] = 'Campaigns'
+
 # Import app après avoir configuré l'environnement de test
 from app import app
 
@@ -16,9 +24,6 @@ def client():
 @pytest.fixture
 def dynamodb_table():
     with mock_aws():
-        # Définir la variable d'environnement pour le nom de la table
-        os.environ['DYNAMODB_TABLE'] = 'Campaigns'
-        
         # Créer une table DynamoDB simulée pour les tests
         dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
         table_name = 'Campaigns'

@@ -2,7 +2,8 @@ import json
 import pytest
 import boto3
 import os
-from moto import mock_dynamodb
+from moto import mock_aws
+
 from app import app
 
 @pytest.fixture
@@ -13,7 +14,7 @@ def client():
 
 @pytest.fixture
 def dynamodb_table():
-    with mock_dynamodb():
+    with mock_aws():
         # Créer une table DynamoDB simulée pour les tests
         dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
         table_name = 'Campaigns'

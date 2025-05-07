@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.13.3"
+          python-version: "3.11" # Corrigé : la version 3.13.3 n'existe pas officiellement
 
       - name: Install dependencies
         run: |
@@ -24,16 +24,13 @@ jobs:
           pip install pytest
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
           if [ -f backend/test-requirements.txt ]; then pip install -r backend/test-requirements.txt; fi
-          if [ -f backend/test_requierements.txt ]; then pip install -r backend/test_requierements.txt; fi
-          # Installer moto explicitement pour s'assurer qu'il est disponible
+          # Supprimé test_requierements.txt (erreur orthographe)
           pip install moto pytest-flask
 
       - name: Lint with flake8
         run: |
           pip install flake8
-          # stop the build if there are Python syntax errors or undefined names
           flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics
-          # exit-zero treats all errors as warnings
           flake8 backend --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Test with pytest
@@ -68,7 +65,7 @@ jobs:
 
       - name: Verify AWS CLI configuration
         run: |
-          aws sts get-caller-identity || echo "AWS CLI verification failed"
+          aws sts get-caller-identity || { echo "AWS CLI verification failed"; exit 1; }
 
       - name: List available solution stacks and save to a file
         run: |
@@ -79,30 +76,16 @@ jobs:
       - name: Select a Python solution stack
         id: select_stack
         run: |
-          # Essayer d'abord les stacks récentes Python 3.11 sur Amazon Linux 2023
-          if grep -q "64bit Amazon Linux 2023.*Python 3.11" python_stacks.txt; then
-            STACK=$(grep "64bit Amazon Linux 2023.*Python 3.11" python_stacks.txt | head -1)
-          # Sinon essayer Python 3.8 sur Amazon Linux 2023
-          elif grep -q "64bit Amazon Linux 2023.*Python 3.8" python_stacks.txt; then
-            STACK=$(grep "64bit Amazon Linux 2023.*Python 3.8" python_stacks.txt | head -1)
-          # Sinon essayer Python 3.8 sur Amazon Linux 2
-          elif grep -q "64bit Amazon Linux 2.*Python 3.8" python_stacks.txt; then
-            STACK=$(grep "64bit Amazon Linux 2.*Python 3.8" python_stacks.txt | head -1)
-          # Sinon prendre la première stack Python disponible
-          else
-            STACK=$(head -1 python_stacks.txt)
-          fi
+          STACK=$(grep -m1 -E "64bit Amazon Linux (2023|2).*Python (3\.11|3\.8)" python_stacks.txt || head -1 python_stacks.txt)
           echo "Selected stack: $STACK"
           echo "stack=$STACK" >> $GITHUB_OUTPUT
 
       - name: Check if Elastic Beanstalk application exists
         id: check_app
         run: |
-          if aws elasticbeanstalk describe-applications --application-names campaign-manager 2>/dev/null; then
-            echo "Application exists"
+          if aws elasticbeanstalk describe-applications --application-names campaign-manager >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
-            echo "Application does not exist"
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
@@ -114,7 +97,7 @@ jobs:
       - name: Create Elastic Beanstalk environment if needed
         id: check_env
         run: |
-          if ! aws elasticbeanstalk describe-environments --environment-names campaign-manager-env --application-name campaign-manager | grep -q "campaign-manager-env"; then
+          if ! aws elasticbeanstalk describe-environments --application-name campaign-manager --environment-names campaign-manager-env | grep -q "campaign-manager-env"; then
             echo "Creating new environment"
             aws elasticbeanstalk create-environment \
               --application-name campaign-manager \

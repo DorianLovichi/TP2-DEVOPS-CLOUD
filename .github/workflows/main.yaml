@@ -79,9 +79,12 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
+  # Le job deploy est désactivé temporairement jusqu'à ce que les permissions EKS soient configurées
+  # Pour l'activer, supprimez simplement la ligne "if: ${{ false }}" ci-dessous
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    if: ${{ false }} # Désactiver le déploiement jusqu'à ce que les permissions soient configurées
 
     steps:
       - uses: actions/checkout@v3
@@ -92,38 +95,23 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 1200
-
-      - name: Verify AWS IAM permissions
-        run: |
-          echo "Vérification des permissions IAM..."
-          aws sts get-caller-identity
-
-          # Vérifier les clusters disponibles
-          echo "Lister tous les clusters EKS..."
-          aws eks list-clusters --region ${{ env.AWS_REGION }}
-
-          # Attacher IAM policy pour EKS si nécessaire (nécessite IAM:AttachUserPolicy)
-          echo "Ajout des permissions EKS au besoin..."
-          aws iam attach-user-policy --user-name $(aws sts get-caller-identity --query 'Arn' --output text | cut -d "/" -f 2) --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy || true
-
-      - name: Check if EKS cluster exists
-        id: check-eks
-        run: |
-          if aws eks list-clusters --region ${{ env.AWS_REGION }} --query "clusters[?contains(@, '${{ env.EKS_CLUSTER_NAME }}')]" --output text | grep -q "${{ env.EKS_CLUSTER_NAME }}"; then
-            echo "Cluster ${{ env.EKS_CLUSTER_NAME }} exists, continuing with deployment."
-            echo "cluster_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "Warning: Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist. Please set up the EKS cluster first."
-            echo "Clusters disponibles:"
-            aws eks list-clusters --region ${{ env.AWS_REGION }}
-            echo "cluster_exists=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Check if EKS cluster exists
+        id: check-eks
+        continue-on-error: true
+        run: |
+          if aws eks describe-cluster --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Cluster ${{ env.EKS_CLUSTER_NAME }} exists, continuing with deployment."
+            echo "cluster_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist or you don't have permission to access it."
+            echo "cluster_exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Setup kubectl
         if: steps.check-eks.outputs.cluster_exists == 'true'

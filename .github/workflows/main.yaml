@@ -66,54 +66,6 @@ jobs:
         run: |
           aws sts get-caller-identity || { echo "AWS CLI verification failed"; exit 1; }
 
-      - name: List available solution stacks and save to a file
-        run: |
-          aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text > python_stacks.txt
-          echo "Available Python Solution Stacks:"
-          cat python_stacks.txt
-
-      - name: Select a Python solution stack
-        id: select_stack
-        run: |
-          STACK=$(grep -m1 -E "64bit Amazon Linux (2023|2).*Python (3\.11|3\.8)" python_stacks.txt)
-          if [ -z "$STACK" ]; then
-            STACK=$(head -n 1 python_stacks.txt)
-          fi
-          if [ -z "$STACK" ]; then
-            echo "No valid solution stack found."
-            exit 1
-          fi
-          echo "Selected stack: $STACK"
-          echo "stack=$STACK" >> $GITHUB_OUTPUT
-
-      - name: Check if Elastic Beanstalk application exists
-        id: check_app
-        run: |
-          if aws elasticbeanstalk describe-applications --application-names campaign-manager >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Elastic Beanstalk application if it doesn't exist
-        if: steps.check_app.outputs.exists == 'false'
-        run: |
-          aws elasticbeanstalk create-application --application-name campaign-manager
-
-      - name: Create Elastic Beanstalk environment if needed
-        id: check_env
-        run: |
-          if ! aws elasticbeanstalk describe-environments --application-name campaign-manager --environment-names campaign-manager-env | grep -q "campaign-manager-env"; then
-            echo "Creating new environment"
-            aws elasticbeanstalk create-environment \
-              --application-name campaign-manager \
-              --environment-name campaign-manager-env \
-              --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
-              --option-settings file://ebconfig.json
-          else
-            echo "Environment already exists."
-          fi
-
       - name: Prepare deployment package
         run: |
           zip -r deploy.zip . -x "*.git*" "*.github*" "node_modules/*" "__pycache__/*" "*.pyc" "*.pyo" "*.pyd" "venv/*" "env/*"

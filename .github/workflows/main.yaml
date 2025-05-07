@@ -82,7 +82,6 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    # La condition "if: ${{ false }}" a été supprimée pour activer le déploiement
 
     steps:
       - uses: actions/checkout@v3
@@ -93,28 +92,44 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 1200
+
+      - name: Verify AWS IAM permissions
+        run: |
+          echo "Vérification des permissions IAM..."
+          aws sts get-caller-identity
+
+          # Vérifier les clusters disponibles
+          echo "Lister tous les clusters EKS..."
+          aws eks list-clusters --region ${{ env.AWS_REGION }}
+
+          # Attacher IAM policy pour EKS si nécessaire (nécessite IAM:AttachUserPolicy)
+          echo "Ajout des permissions EKS au besoin..."
+          aws iam attach-user-policy --user-name $(aws sts get-caller-identity --query 'Arn' --output text | cut -d "/" -f 2) --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy || true
+
+      - name: Check if EKS cluster exists
+        id: check-eks
+        run: |
+          if aws eks list-clusters --region ${{ env.AWS_REGION }} --query "clusters[?contains(@, '${{ env.EKS_CLUSTER_NAME }}')]" --output text | grep -q "${{ env.EKS_CLUSTER_NAME }}"; then
+            echo "Cluster ${{ env.EKS_CLUSTER_NAME }} exists, continuing with deployment."
+            echo "cluster_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Warning: Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist. Please set up the EKS cluster first."
+            echo "Clusters disponibles:"
+            aws eks list-clusters --region ${{ env.AWS_REGION }}
+            echo "cluster_exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Check if EKS cluster exists
-        id: check-eks
-        run: |
-          if aws eks describe-cluster --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            echo "Cluster ${{ env.EKS_CLUSTER_NAME }} exists, continuing with deployment."
-            echo "cluster_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "Warning: Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist. Please set up the EKS cluster first."
-            echo "cluster_exists=false" >> $GITHUB_OUTPUT
-            exit 1  # Échec si le cluster n'existe pas
-          fi
-
       - name: Setup kubectl
         if: steps.check-eks.outputs.cluster_exists == 'true'
-        uses: azure/setup-kubectl@v1
+        uses: azure/setup-kubectl@v3
         with:
-          version: "v1.24.0"
+          version: "v1.29.0"
 
       - name: Update kube config
         if: steps.check-eks.outputs.cluster_exists == 'true'
@@ -130,11 +145,61 @@ jobs:
           # Create namespace if doesn't exist
           kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
-          # Update kubernetes deployment file with new image
-          envsubst < k8s/deployment.yaml | kubectl apply -n ${{ env.KUBERNETES_NAMESPACE }} -f -
+          # Create Kubernetes deployment YAML dynamically
+          cat > k8s-deployment.yaml << EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: campaign-manager
+            labels:
+              app: campaign-manager
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: campaign-manager
+            template:
+              metadata:
+                labels:
+                  app: campaign-manager
+              spec:
+                containers:
+                - name: campaign-manager
+                  image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+                  ports:
+                  - containerPort: 5000
+                  env:
+                  - name: DYNAMODB_TABLE
+                    value: "Campaigns"
+                  - name: AWS_REGION
+                    value: "${{ env.AWS_REGION }}"
+          EOF
 
-          # Update service if it exists
-          kubectl apply -n ${{ env.KUBERNETES_NAMESPACE }} -f k8s/service.yaml
+          # Create Kubernetes service YAML dynamically
+          cat > k8s-service.yaml << EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: campaign-manager
+            labels:
+              app: campaign-manager
+          spec:
+            type: LoadBalancer
+            ports:
+            - port: 80
+              targetPort: 5000
+              protocol: TCP
+            selector:
+              app: campaign-manager
+          EOF
+
+          # Apply Kubernetes manifests
+          kubectl apply -f k8s-deployment.yaml -n ${{ env.KUBERNETES_NAMESPACE }}
+          kubectl apply -f k8s-service.yaml -n ${{ env.KUBERNETES_NAMESPACE }}
 
           # Wait for deployment to be ready
           kubectl rollout status deployment/campaign-manager -n ${{ env.KUBERNETES_NAMESPACE }}
+
+          # Get service URL
+          echo "Service URL:"
+          kubectl get svc campaign-manager -n ${{ env.KUBERNETES_NAMESPACE }}

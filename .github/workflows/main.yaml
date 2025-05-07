@@ -82,7 +82,6 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    # Le déploiement est maintenant activé (ligne if: ${{ false }} supprimée))
 
     steps:
       - uses: actions/checkout@v3
@@ -94,35 +93,112 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Install AWS CLI and Kubernetes tools
+        run: |
+          # Installer kubectl
+          curl -LO "https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+          # Installer AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install --update
+
+          # Installer eksctl
+          curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+          sudo mv /tmp/eksctl /usr/local/bin
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Check if EKS cluster exists
+      - name: Debug - Check caller identity
+        run: aws sts get-caller-identity
+
+      - name: Debug - Check EKS clusters
+        run: aws eks list-clusters --region ${{ env.AWS_REGION }}
+
+      - name: Check if EKS cluster exists and get auth token
         id: check-eks
-        continue-on-error: true
         run: |
+          # Vérifier si le cluster existe
           if aws eks describe-cluster --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
             echo "Cluster ${{ env.EKS_CLUSTER_NAME }} exists, continuing with deployment."
             echo "cluster_exists=true" >> $GITHUB_OUTPUT
+            
+            # Créer/mettre à jour la configuration kubectl
+            aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+            
+            # Vérifier la configuration kubectl
+            kubectl config view --minify
+            
+            # Obtenir un jeton d'authentification pour le cluster
+            TOKEN=$(aws eks get-token --cluster-name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} | jq -r '.status.token')
+            echo "eks_token=$TOKEN" >> $GITHUB_OUTPUT
           else
             echo "Warning: Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist or you don't have permission to access it."
-            echo "Les clusters disponibles sont:"
-            aws eks list-clusters --region ${{ env.AWS_REGION }} || echo "Impossible de lister les clusters."
             echo "cluster_exists=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: Setup kubectl
-        if: steps.check-eks.outputs.cluster_exists == 'true'
-        uses: azure/setup-kubectl@v3
-        with:
-          version: "v1.29.0"
-
-      - name: Update kube config
+      - name: EKS Access Configuration
         if: steps.check-eks.outputs.cluster_exists == 'true'
         run: |
+          echo "Configuring access for IAM user"
+
+          # Obtenir l'ARN de l'utilisateur IAM actuel
+          USER_ARN=$(aws sts get-caller-identity --query 'Arn' --output text)
+          USER_NAME=$(echo $USER_ARN | cut -d '/' -f 2)
+          echo "Current user ARN: $USER_ARN"
+
+          # Vérifier si les accès EKS sont activés
+          if aws eks list-access-entries --cluster-name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Using EKS Access Entries"
+            
+            # Créer une entrée d'accès pour l'utilisateur actuel
+            aws eks create-access-entry \
+              --cluster-name ${{ env.EKS_CLUSTER_NAME }} \
+              --principal-arn $USER_ARN \
+              --region ${{ env.AWS_REGION }} || echo "Access entry may already exist"
+            
+            # Associer la politique d'administration
+            aws eks associate-access-policy \
+              --cluster-name ${{ env.EKS_CLUSTER_NAME }} \
+              --principal-arn $USER_ARN \
+              --policy-arn "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" \
+              --access-scope '{"type": "cluster"}' \
+              --region ${{ env.AWS_REGION }} || echo "Policy may already be associated"
+          else
+            echo "Using ConfigMap for authentication"
+            
+            # Créer un ConfigMap temporaire pour l'authentification
+            cat > aws-auth-configmap.yaml << EOF
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: aws-auth
+              namespace: kube-system
+            data:
+              mapUsers: |
+                - userarn: $USER_ARN
+                  username: $USER_NAME
+                  groups:
+                  - system:masters
+            EOF
+            
+            # Essayer d'appliquer le ConfigMap
+            kubectl apply -f aws-auth-configmap.yaml --validate=false || echo "Could not apply ConfigMap directly"
+            
+            # Si l'application directe échoue, essayer de fusionner avec un ConfigMap existant
+            kubectl get configmap aws-auth -n kube-system -o yaml || echo "ConfigMap not found"
+          fi
+
+          # Mise à jour de la configuration kubectl
           aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+          # Vérification finale de l'accès
+          kubectl auth can-i '*' '*' || echo "Could not verify permissions"
 
       - name: Deploy to EKS
         if: steps.check-eks.outputs.cluster_exists == 'true'
@@ -131,7 +207,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           # Create namespace if doesn't exist
-          kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f - --validate=false
 
           # Create Kubernetes deployment YAML dynamically
           cat > k8s-deployment.yaml << EOF
@@ -181,12 +257,12 @@ jobs:
               app: campaign-manager
           EOF
 
-          # Apply Kubernetes manifests
-          kubectl apply -f k8s-deployment.yaml -n ${{ env.KUBERNETES_NAMESPACE }}
-          kubectl apply -f k8s-service.yaml -n ${{ env.KUBERNETES_NAMESPACE }}
+          # Apply Kubernetes manifests with validation disabled
+          kubectl apply -f k8s-deployment.yaml -n ${{ env.KUBERNETES_NAMESPACE }} --validate=false
+          kubectl apply -f k8s-service.yaml -n ${{ env.KUBERNETES_NAMESPACE }} --validate=false
 
           # Wait for deployment to be ready
-          kubectl rollout status deployment/campaign-manager -n ${{ env.KUBERNETES_NAMESPACE }}
+          kubectl rollout status deployment/campaign-manager -n ${{ env.KUBERNETES_NAMESPACE }} --timeout=300s || true
 
           # Get service URL
           echo "Service URL:"

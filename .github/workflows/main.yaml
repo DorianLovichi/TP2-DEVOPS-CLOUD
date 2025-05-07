@@ -74,10 +74,9 @@ jobs:
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           application_name: campaign-manager
           environment_name: campaign-manager-env
           version_label: ${{ github.sha }}
           region: us-east-1
           deployment_package: deploy.zip
-          platform: "64bit Amazon Linux 2023 v4.5.1 running Python 3.13"

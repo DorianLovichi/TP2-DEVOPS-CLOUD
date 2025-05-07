@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-north-1
   ECR_REPOSITORY: campaign-manager
   EC2_INSTANCE_ID: i-03f4ac4bc5e58787d # Remplace par l'ID de ton EC2
   EC2_SSH_KEY_NAME: TP2.pem # Remplace par le nom de ta clé SSH EC2

@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11" # Corrigé : la version 3.13.3 n'existe pas officiellement
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -24,7 +24,6 @@ jobs:
           pip install pytest
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
           if [ -f backend/test-requirements.txt ]; then pip install -r backend/test-requirements.txt; fi
-          # Supprimé test_requierements.txt (erreur orthographe)
           pip install moto pytest-flask
 
       - name: Lint with flake8
@@ -67,18 +66,32 @@ jobs:
         run: |
           aws sts get-caller-identity || { echo "AWS CLI verification failed"; exit 1; }
 
-      - name: List available solution stacks and save to a file
-        run: |
-          aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text > python_stacks.txt
-          echo "Available Python Solution Stacks:"
-          cat python_stacks.txt
-
-      - name: Select a Python solution stack
+      - name: Select Python solution stack
         id: select_stack
         run: |
-          STACK=$(grep -m1 -E "64bit Amazon Linux (2023|2).*Python (3\.11|3\.8)" python_stacks.txt || head -1 python_stacks.txt)
-          echo "Selected stack: $STACK"
-          echo "stack=$STACK" >> $GITHUB_OUTPUT
+          # Définir les stacks dans l'ordre de préférence
+          STACKS=(
+            "64bit Amazon Linux 2023 v4.5.1 running Python 3.11"
+            "64bit Amazon Linux 2023 v4.5.1 running Python 3.9"
+            "64bit Amazon Linux 2023 v4.5.1 running Python 3.12"
+            "64bit Amazon Linux 2023 v4.5.1 running Python 3.13"
+          )
+
+          # Vérifier quelles stacks sont disponibles
+          for STACK in "${STACKS[@]}"; do
+            if aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, '$STACK')]" --output text | grep -q "$STACK"; then
+              echo "Found available stack: $STACK"
+              echo "stack=$STACK" >> $GITHUB_OUTPUT
+              break
+            fi
+          done
+
+          # Si aucune des stacks préférées n'est disponible, prendre la première stack Python disponible
+          if [ -z "${{ steps.select_stack.outputs.stack }}" ]; then
+            STACK=$(aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text | head -1)
+            echo "Using fallback stack: $STACK"
+            echo "stack=$STACK" >> $GITHUB_OUTPUT
+          fi
 
       - name: Check if Elastic Beanstalk application exists
         id: check_app
@@ -98,7 +111,7 @@ jobs:
         id: check_env
         run: |
           if ! aws elasticbeanstalk describe-environments --application-name campaign-manager --environment-names campaign-manager-env | grep -q "campaign-manager-env"; then
-            echo "Creating new environment"
+            echo "Creating new environment with stack: ${{ steps.select_stack.outputs.stack }}"
             aws elasticbeanstalk create-environment \
               --application-name campaign-manager \
               --environment-name campaign-manager-env \

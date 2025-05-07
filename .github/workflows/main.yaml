@@ -55,6 +55,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Create ECR repository if it doesn't exist
+        run: |
+          if ! aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Creating ECR repository ${{ env.ECR_REPOSITORY }}..."
+            aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }}
+          else
+            echo "ECR repository ${{ env.ECR_REPOSITORY }} already exists."
+          fi
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
@@ -73,6 +82,7 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    if: ${{ false }} # Désactivé pour l'instant jusqu'à ce que le cluster EKS soit configuré
 
     steps:
       - uses: actions/checkout@v3
@@ -88,16 +98,31 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
+      - name: Check if EKS cluster exists
+        id: check-eks
+        run: |
+          if aws eks describe-cluster --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Cluster ${{ env.EKS_CLUSTER_NAME }} exists, continuing with deployment."
+            echo "cluster_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Warning: Cluster ${{ env.EKS_CLUSTER_NAME }} does not exist. Please set up the EKS cluster first."
+            echo "cluster_exists=false" >> $GITHUB_OUTPUT
+            exit 0  # Exit without error to allow workflow to continue
+          fi
+
       - name: Setup kubectl
+        if: steps.check-eks.outputs.cluster_exists == 'true'
         uses: azure/setup-kubectl@v1
         with:
           version: "v1.24.0"
 
       - name: Update kube config
+        if: steps.check-eks.outputs.cluster_exists == 'true'
         run: |
           aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
       - name: Deploy to EKS
+        if: steps.check-eks.outputs.cluster_exists == 'true'
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}

@@ -70,9 +70,30 @@ jobs:
         run: |
           aws sts get-caller-identity || echo "AWS CLI verification failed"
 
-      - name: List available solution stacks
+      - name: List available solution stacks and save to a file
         run: |
-          aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text
+          aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text > python_stacks.txt
+          echo "Available Python Solution Stacks:"
+          cat python_stacks.txt
+
+      - name: Select a Python solution stack
+        id: select_stack
+        run: |
+          # Essayer d'abord les stacks récentes Python 3.11 sur Amazon Linux 2023
+          if grep -q "64bit Amazon Linux 2023.*Python 3.11" python_stacks.txt; then
+            STACK=$(grep "64bit Amazon Linux 2023.*Python 3.11" python_stacks.txt | head -1)
+          # Sinon essayer Python 3.8 sur Amazon Linux 2023
+          elif grep -q "64bit Amazon Linux 2023.*Python 3.8" python_stacks.txt; then
+            STACK=$(grep "64bit Amazon Linux 2023.*Python 3.8" python_stacks.txt | head -1)
+          # Sinon essayer Python 3.8 sur Amazon Linux 2
+          elif grep -q "64bit Amazon Linux 2.*Python 3.8" python_stacks.txt; then
+            STACK=$(grep "64bit Amazon Linux 2.*Python 3.8" python_stacks.txt | head -1)
+          # Sinon prendre la première stack Python disponible
+          else
+            STACK=$(head -1 python_stacks.txt)
+          fi
+          echo "Selected stack: $STACK"
+          echo "stack=$STACK" >> $GITHUB_OUTPUT
 
       - name: Check if Elastic Beanstalk application exists
         id: check_app
@@ -98,7 +119,7 @@ jobs:
             aws elasticbeanstalk create-environment \
               --application-name campaign-manager \
               --environment-name campaign-manager-env \
-              --solution-stack-name "64bit Amazon Linux 2 v3.5.5 running Python 3.8" \
+              --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
               --option-settings file://ebconfig.json
           fi
 
@@ -110,7 +131,7 @@ jobs:
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           application_name: campaign-manager
           environment_name: campaign-manager-env
           version_label: ${{ github.sha }}

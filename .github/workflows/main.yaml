@@ -10,8 +10,8 @@ on:
 env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: campaign-manager
-  EC2_INSTANCE_ID: i-03f4ac4bc5e58787d # Remplace par l'ID de ton EC2
-  EC2_SSH_KEY_NAME: TP2.pem # Remplace par le nom de ta clé SSH EC2
+  EC2_INSTANCE_ID: i-01ca099839bc9605a # Remplace par l'ID de ton EC2
+  EC2_SSH_KEY_NAME: C:\Users\doria\.ssh\TP2_cloud # Remplace par le nom de ta clé SSH EC2
 
 jobs:
   test:

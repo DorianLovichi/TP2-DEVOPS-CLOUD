@@ -70,6 +70,10 @@ jobs:
         run: |
           aws sts get-caller-identity || echo "AWS CLI verification failed"
 
+      - name: List available solution stacks
+        run: |
+          aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text
+
       - name: Check if Elastic Beanstalk application exists
         id: check_app
         run: |
@@ -94,7 +98,7 @@ jobs:
             aws elasticbeanstalk create-environment \
               --application-name campaign-manager \
               --environment-name campaign-manager-env \
-              --solution-stack-name "64bit Amazon Linux 2023 v4.0.8 running Python 3.11" \
+              --solution-stack-name "64bit Amazon Linux 2 v3.5.5 running Python 3.8" \
               --option-settings file://ebconfig.json
           fi
 
@@ -106,7 +110,7 @@ jobs:
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           application_name: campaign-manager
           environment_name: campaign-manager-env
           version_label: ${{ github.sha }}

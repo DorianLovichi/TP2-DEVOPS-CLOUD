@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: |
@@ -66,59 +66,6 @@ jobs:
         run: |
           aws sts get-caller-identity || { echo "AWS CLI verification failed"; exit 1; }
 
-      - name: Select Python solution stack
-        id: select_stack
-        run: |
-          # Définir les stacks dans l'ordre de préférence
-          STACKS=(
-            "64bit Amazon Linux 2023 v4.5.1 running Python 3.11"
-            "64bit Amazon Linux 2023 v4.5.1 running Python 3.9"
-            "64bit Amazon Linux 2023 v4.5.1 running Python 3.12"
-            "64bit Amazon Linux 2023 v4.5.1 running Python 3.13"
-          )
-
-          # Vérifier quelles stacks sont disponibles
-          for STACK in "${STACKS[@]}"; do
-            if aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, '$STACK')]" --output text | grep -q "$STACK"; then
-              echo "Found available stack: $STACK"
-              echo "stack=$STACK" >> $GITHUB_OUTPUT
-              break
-            fi
-          done
-
-          # Si aucune des stacks préférées n'est disponible, prendre la première stack Python disponible
-          if [ -z "${{ steps.select_stack.outputs.stack }}" ]; then
-            STACK=$(aws elasticbeanstalk list-available-solution-stacks --query "SolutionStacks[?contains(@, 'Python')]" --output text | head -1)
-            echo "Using fallback stack: $STACK"
-            echo "stack=$STACK" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Check if Elastic Beanstalk application exists
-        id: check_app
-        run: |
-          if aws elasticbeanstalk describe-applications --application-names campaign-manager >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Elastic Beanstalk application if it doesn't exist
-        if: steps.check_app.outputs.exists == 'false'
-        run: |
-          aws elasticbeanstalk create-application --application-name campaign-manager
-
-      - name: Create Elastic Beanstalk environment if needed
-        id: check_env
-        run: |
-          if ! aws elasticbeanstalk describe-environments --application-name campaign-manager --environment-names campaign-manager-env | grep -q "campaign-manager-env"; then
-            echo "Creating new environment with stack: ${{ steps.select_stack.outputs.stack }}"
-            aws elasticbeanstalk create-environment \
-              --application-name campaign-manager \
-              --environment-name campaign-manager-env \
-              --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
-              --option-settings file://ebconfig.json
-          fi
-
       - name: Prepare deployment package
         run: |
           zip -r deploy.zip . -x "*.git*" "*.github*" "node_modules/*" "__pycache__/*" "*.pyc" "*.pyo" "*.pyd" "venv/*" "env/*"
@@ -127,9 +74,10 @@ jobs:
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           application_name: campaign-manager
           environment_name: campaign-manager-env
           version_label: ${{ github.sha }}
           region: us-east-1
           deployment_package: deploy.zip
+          platform: "64bit Amazon Linux 2023 v4.5.1 running Python 3.13"

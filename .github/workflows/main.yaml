@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11" # Corrigé : la version 3.13.3 n'existe pas officiellement
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -24,7 +24,6 @@ jobs:
           pip install pytest
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
           if [ -f backend/test-requirements.txt ]; then pip install -r backend/test-requirements.txt; fi
-          # Supprimé test_requierements.txt (erreur orthographe)
           pip install moto pytest-flask
 
       - name: Lint with flake8
@@ -76,7 +75,14 @@ jobs:
       - name: Select a Python solution stack
         id: select_stack
         run: |
-          STACK=$(grep -m1 -E "64bit Amazon Linux (2023|2).*Python (3\.11|3\.8)" python_stacks.txt || head -1 python_stacks.txt)
+          STACK=$(grep -m1 -E "64bit Amazon Linux (2023|2).*Python (3\.11|3\.8)" python_stacks.txt)
+          if [ -z "$STACK" ]; then
+            STACK=$(head -n 1 python_stacks.txt)
+          fi
+          if [ -z "$STACK" ]; then
+            echo "No valid solution stack found."
+            exit 1
+          fi
           echo "Selected stack: $STACK"
           echo "stack=$STACK" >> $GITHUB_OUTPUT
 
@@ -104,6 +110,8 @@ jobs:
               --environment-name campaign-manager-env \
               --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
               --option-settings file://ebconfig.json
+          else
+            echo "Environment already exists."
           fi
 
       - name: Prepare deployment package

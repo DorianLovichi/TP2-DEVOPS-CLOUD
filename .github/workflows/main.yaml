@@ -9,13 +9,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.13"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -23,10 +24,11 @@ jobs:
           pip install pytest
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
           if [ -f backend/test-requirements.txt ]; then pip install -r backend/test-requirements.txt; fi
-          pip install moto pytest-flask flake8
+          pip install moto pytest-flask
 
       - name: Lint with flake8
         run: |
+          pip install flake8
           flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 backend --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
@@ -37,8 +39,20 @@ jobs:
   build-and-deploy:
     needs: test
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
+
+      - name: Verify AWS credentials availability
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "AWS_ACCESS_KEY_ID is not set."
+            exit 1
+          fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "AWS_SECRET_ACCESS_KEY is not set."
+            exit 1
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -47,16 +61,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Check if Beanstalk app exists
+      - name: Select Python 3.13 stack explicitly
+        id: select_stack
+        run: |
+          STACK="64bit Amazon Linux 2023 v4.5.1 running Python 3.13"
+          echo "Selected stack: $STACK"
+          echo "stack=$STACK" >> $GITHUB_OUTPUT
+
+      - name: Check if Elastic Beanstalk application exists
         id: check_app
         run: |
-          if aws elasticbeanstalk describe-applications --application-names campaign-manager 2>/dev/null; then
+          if aws elasticbeanstalk describe-applications --application-names campaign-manager >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create Beanstalk app if missing
+      - name: Create Elastic Beanstalk application if not exists
         if: steps.check_app.outputs.exists == 'false'
         run: |
           aws elasticbeanstalk create-application --application-name campaign-manager
@@ -64,23 +85,37 @@ jobs:
       - name: Check if environment exists
         id: check_env
         run: |
-          if aws elasticbeanstalk describe-environments \
-            --application-name campaign-manager \
-            --environment-names campaign-manager-env \
-            --no-include-deleted | grep -q "campaign-manager-env"; then
+          if aws elasticbeanstalk describe-environments --application-name campaign-manager --environment-names campaign-manager-env | grep -q "campaign-manager-env"; then
             echo "env_exists=true" >> $GITHUB_OUTPUT
           else
             echo "env_exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create environment if missing
+      - name: Create Elastic Beanstalk environment if needed
         if: steps.check_env.outputs.env_exists == 'false'
         run: |
           aws elasticbeanstalk create-environment \
             --application-name campaign-manager \
             --environment-name campaign-manager-env \
-            --solution-stack-name "64bit Amazon Linux 2023 v4.5.1 running Python 3.13" \
-            --option-settings Namespace=aws:elasticbeanstalk:environment,OptionName=EnvironmentType,Value=SingleInstance
+            --solution-stack-name "${{ steps.select_stack.outputs.stack }}" \
+            --option-settings file://ebconfig.json
+
+      - name: Wait for environment to be READY
+        run: |
+          echo "Waiting for environment to be in READY state..."
+          for i in {1..18}; do
+            STATUS=$(aws elasticbeanstalk describe-environments \
+              --application-name campaign-manager \
+              --environment-names campaign-manager-env \
+              --query "Environments[0].Status" --output text)
+            echo "Current status: $STATUS"
+            if [ "$STATUS" = "Ready" ]; then
+              echo "Environment is ready."
+              break
+            fi
+            echo "Still not ready, sleeping 20s..."
+            sleep 20
+          done
 
       - name: Prepare deployment package
         run: |

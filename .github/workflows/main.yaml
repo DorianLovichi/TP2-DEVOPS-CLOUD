@@ -23,6 +23,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+          if [ -f backend/test-requirements.txt ]; then pip install -r backend/test-requirements.txt; fi
+          if [ -f backend/test_requierements.txt ]; then pip install -r backend/test_requierements.txt; fi
+          # Installer moto explicitement pour s'assurer qu'il est disponible
+          pip install moto pytest-flask
 
       - name: Lint with flake8
         run: |
@@ -50,6 +54,38 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Check if Elastic Beanstalk application exists
+        id: check_app
+        run: |
+          if aws elasticbeanstalk describe-applications --application-names campaign-manager 2>/dev/null; then
+            echo "Application exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Application does not exist"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Elastic Beanstalk application if it doesn't exist
+        if: steps.check_app.outputs.exists == 'false'
+        run: |
+          aws elasticbeanstalk create-application --application-name campaign-manager
+
+      - name: Create Elastic Beanstalk environment if needed
+        id: check_env
+        run: |
+          if ! aws elasticbeanstalk describe-environments --environment-names campaign-manager-env --application-name campaign-manager | grep -q "campaign-manager-env"; then
+            echo "Creating new environment"
+            aws elasticbeanstalk create-environment \
+              --application-name campaign-manager \
+              --environment-name campaign-manager-env \
+              --solution-stack-name "64bit Amazon Linux 2023 v4.0.8 running Python 3.11" \
+              --option-settings file://ebconfig.json
+          fi
+
+      - name: Prepare deployment package
+        run: |
+          zip -r deploy.zip . -x "*.git*" "*.github*" "node_modules/*" "__pycache__/*" "*.pyc" "*.pyo" "*.pyd" "venv/*" "env/*"
+
       - name: Deploy to Elastic Beanstalk
         uses: einaregilsson/beanstalk-deploy@v21
         with:
@@ -60,7 +96,3 @@ jobs:
           version_label: ${{ github.sha }}
           region: us-east-1
           deployment_package: deploy.zip
-
-      - name: Prepare deployment package
-        run: |
-          zip -r deploy.zip . -x "*.git*"

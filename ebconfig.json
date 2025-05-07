@@ -1,0 +1,22 @@
+[
+  {
+    "Namespace": "aws:autoscaling:launchconfiguration",
+    "OptionName": "IamInstanceProfile",
+    "Value": "aws-elasticbeanstalk-ec2-role"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:application:environment",
+    "OptionName": "DYNAMODB_TABLE",
+    "Value": "Campaigns"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:container:python",
+    "OptionName": "WSGIPath",
+    "Value": "backend.app:app"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:environment",
+    "OptionName": "EnvironmentType",
+    "Value": "SingleInstance"
+  }
+]

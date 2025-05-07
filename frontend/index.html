@@ -1,0 +1,30 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Campaign Manager</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Campaign Manager</h1>
+      <form id="campaignForm">
+        <input type="text" id="title" placeholder="Campaign Title" required />
+        <textarea
+          id="description"
+          placeholder="Description"
+          required
+        ></textarea>
+        <input type="date" id="startDate" required />
+        <input type="date" id="endDate" required />
+        <button type="submit">Add Campaign</button>
+      </form>
+      <div id="campaigns"></div>
+    </div>
+
+    <script src="frontend/app.js"></script>
+  </body>
+</html>

@@ -82,7 +82,7 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    # Le déploiement est maintenant activé (ligne if: ${{ false }} supprimée)
+    # Le déploiement est maintenant activé (ligne if: ${{ false }} supprimée))
 
     steps:
       - uses: actions/checkout@v3
